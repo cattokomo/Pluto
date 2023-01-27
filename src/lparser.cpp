@@ -70,6 +70,7 @@ typedef struct BlockCnt {
   int firstlabel;  /* index of first label in this block */
   int firstgoto;  /* index of first pending goto in this block */
   lu_byte nactvar;  /* # active locals outside the block */
+  int nactconst;  /* # active compile-time constants outside the block */
   lu_byte upval;  /* true if some variable in the block is an upvalue */
   lu_byte isloop;  /* true if 'block' is a loop */
   lu_byte insidetbc;  /* true if inside the scope of a to-be-closed var. */
@@ -382,7 +383,7 @@ static void exp_propagate(LexState* ls, const expdesc& e, TypeDesc& t) noexcept 
     t = getlocalvardesc(ls->fs, e.u.var.vidx)->vd.prop;
   }
   else if (e.k == VCONST) {
-    TValue* val = &ls->dyd->actvar.arr[e.u.info].k;
+    TValue* val = &getconstvardesc(ls->fs, e.u.info)->k;
     switch (ttype(val))
     {
     case LUA_TNIL: t = VT_NIL; break;
@@ -430,8 +431,7 @@ static void process_assign(LexState* ls, Vardesc* var, const TypeDesc& td, int l
 static int reglevel (FuncState *fs, int nvar) {
   while (nvar-- > 0) {
     Vardesc *vd = getlocalvardesc(fs, nvar);  /* get previous variable */
-    if (vd->vd.kind != RDKCTC)  /* is in a register? */
-      return vd->vd.ridx + 1;
+    return vd->vd.ridx + 1;
   }
   return 0;  /* no variables in registers */
 }
@@ -471,6 +471,7 @@ static int new_localvar (LexState *ls, TString *name, int line, const TypeDesc& 
   Dyndata *dyd = ls->dyd;
   Vardesc *var;
 #ifndef PLUTO_NO_PARSER_WARNINGS
+  // TODO: Use searchvar so constants are included
   int locals = luaY_nvarstack(fs);
   for (int i = fs->firstlocal; i < locals; i++) {
     Vardesc *desc = getlocalvardesc(fs, i);
@@ -565,6 +566,19 @@ static void adjustlocalvars (LexState *ls, int nvars) {
 
 
 /*
+** Start the scope for the last created variable
+** as a compile-time constant.
+*/
+static void adjust2const (LexState *ls) {
+  Dyndata *dyd = ls->dyd;
+  luaM_growvector(ls->L, dyd->actconst.arr, dyd->actconst.n + 1,
+	  dyd->actconst.size, Vardesc, INT_MAX, "local variables");
+  dyd->actconst.arr[dyd->actconst.n++] = dyd->actvar.arr[--dyd->actvar.n];
+  ++ls->fs->nactconst;
+}
+
+
+/*
 ** Close the scope for all variables up to level 'tolevel'.
 ** (debug info.)
 */
@@ -575,6 +589,16 @@ static void removevars (FuncState *fs, int tolevel) {
     if (var)  /* does it have debug information? */
       var->endpc = fs->pc;
   }
+}
+
+
+/*
+** Close the scope for all compile-time constants up to level 'tolevel'.
+** (debug info.)
+*/
+static void removeconsts (FuncState *fs, int tolevel) {
+  fs->ls->dyd->actconst.n -= (fs->nactconst - tolevel);
+  fs->nactconst = tolevel;
 }
 
 
@@ -632,13 +656,17 @@ static int newupvalue (FuncState *fs, TString *name, expdesc *v) {
 */
 static int searchvar (FuncState *fs, TString *n, expdesc *var) {
   int i;
-  for (i = cast_int(fs->nactvar) - 1; i >= 0; i--) {
+  for (i = cast_int(fs->nactvar) - 1; i >= 0; i--) {  /* look through real variables */
     Vardesc *vd = getlocalvardesc(fs, i);
     if (eqstr(n, vd->vd.name)) {  /* found? */
-      if (vd->vd.kind == RDKCTC)  /* compile-time constant? */
-        init_exp(var, VCONST, fs->firstlocal + i);
-      else  /* real variable */
-        init_var(fs, var, i);
+      init_var(fs, var, i);
+      return var->k;
+    }
+  }
+  for (i = fs->nactconst - 1; i >= 0; i--) {  /* look through compile-time constants */
+    Vardesc *vd = getconstvardesc(fs, i);
+    if (eqstr(n, vd->vd.name)) {  /* found? */
+      init_exp(var, VCONST, fs->firstconst + i);
       return var->k;
     }
   }
@@ -876,6 +904,7 @@ static int createlabel (LexState *ls, TString *name, int line,
   if (last) {  /* label is last no-op statement in the block? */
     /* assume that locals are already out of scope */
     ll->arr[l].nactvar = fs->bl->nactvar;
+    ll->arr[l].nactconst = fs->bl->nactconst;
   }
   if (solvegotos(ls, &ll->arr[l])) {  /* need close? */
     luaK_codeABC(fs, OP_CLOSE, luaY_nvarstack(fs), 0, 0);
@@ -907,6 +936,7 @@ static void enterblock (FuncState *fs, BlockCnt *bl, lu_byte isloop) {
   bl->isloop = isloop;
   bl->scopeend = NO_JUMP;
   bl->nactvar = fs->nactvar;
+  bl->nactconst = fs->nactconst;
   bl->firstlabel = fs->ls->dyd->label.n;
   bl->firstgoto = fs->ls->dyd->gt.n;
   bl->upval = 0;
@@ -940,7 +970,9 @@ static void leaveblock (FuncState *fs) {
   int hasclose = 0;
   int stklevel = reglevel(fs, bl->nactvar);  /* level outside the block */
   removevars(fs, bl->nactvar);  /* remove block locals */
+  removeconsts(fs, bl->nactconst);  /* remove block compile-time constants */
   lua_assert(bl->nactvar == fs->nactvar);  /* back to level on entry */
+  lua_assert(bl->nactconst == fs->nactconst);  /* back to level on entry */
   if (bl->isloop)  /* has to fix pending breaks? */
     hasclose = createlabel(ls, luaS_newliteral(ls->L, "break"), 0, 0);
   if (!hasclose && bl->previous && bl->upval)  /* still need a 'close'? */
@@ -1009,8 +1041,10 @@ static void open_func (LexState *ls, FuncState *fs, BlockCnt *bl) {
   fs->nups = 0;
   fs->ndebugvars = 0;
   fs->nactvar = 0;
+  fs->nactconst = 0;
   fs->needclose = 0;
   fs->firstlocal = ls->dyd->actvar.n;
+  fs->firstconst = ls->dyd->actconst.n;
   fs->firstlabel = ls->dyd->label.n;
   fs->bl = NULL;
   f->source = ls->source;
@@ -2603,7 +2637,7 @@ static void enumstat (LexState *ls) {
     }
     var->vd.kind = RDKCTC;
     setivalue(&var->k, i++);
-    ls->fs->nactvar++;
+    adjust2const(ls);
     if (gett(ls) != ',') break;
     luaX_next(ls);
   }
@@ -3037,8 +3071,8 @@ static void localstat (LexState *ls) {
     if (var->vd.kind == RDKCONST &&  /* last variable is const? */
         luaK_exp2const(fs, &e, &var->k)) {  /* compile-time constant? */
       var->vd.kind = RDKCTC;  /* variable is a compile-time constant */
-      adjustlocalvars(ls, nvars - 1);  /* exclude last variable */
-      fs->nactvar++;  /* but count it */
+      adjustlocalvars(ls, nvars - 1);
+      adjust2const(ls);
     }
     else {
       vidx = vidx - nvars + 1;
@@ -3289,7 +3323,7 @@ LClosure *luaY_parser (lua_State *L, ZIO *z, Mbuffer *buff,
   luaC_objbarrier(L, funcstate.f, funcstate.f->source);
   lexstate.buff = buff;
   lexstate.dyd = dyd;
-  dyd->actvar.n = dyd->gt.n = dyd->label.n = 0;
+  dyd->actvar.n = dyd->actconst.n = dyd->gt.n = dyd->label.n = 0;
   luaX_setinput(L, &lexstate, z, funcstate.f->source, firstchar);
   mainfunc(&lexstate, &funcstate);
   lua_assert(!funcstate.prev && funcstate.nups == 1 && !lexstate.fs);

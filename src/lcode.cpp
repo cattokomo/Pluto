@@ -70,7 +70,7 @@ static int tonumeral (const expdesc *e, TValue *v) {
 */
 static TValue *const2val (FuncState *fs, const expdesc *e) {
   lua_assert(e->k == VCONST);
-  return &fs->ls->dyd->actvar.arr[e->u.info].k;
+  return &getconstvardesc(fs, e->u.info)->k;
 }
 
 

@@ -273,8 +273,17 @@ typedef struct Labeldesc {
   int pc;  /* position in code */
   int line;  /* line where it appeared */
   lu_byte nactvar;  /* number of active variables in that position */
+  int nactconst;  /* [Pluto] number of active compile-time constants in that position */
   lu_byte close;  /* goto that escapes upvalues */
 } Labeldesc;
+
+
+/* List of variables */
+struct Varlist {
+  Vardesc *arr;
+  int n;
+  int size;
+};
 
 
 /* list of labels or gotos */
@@ -287,11 +296,8 @@ typedef struct Labellist {
 
 /* dynamic structures used by the parser */
 typedef struct Dyndata {
-  struct {  /* list of all active local variables */
-    Vardesc *arr;
-    int n;
-    int size;
-  } actvar;
+  Varlist actvar;  /* list of all active local variables */
+  Varlist actconst;  /* [Pluto] list of all active compile-time constants */
   Labellist gt;  /* list of pending gotos */
   Labellist label;   /* list of active labels */
 } Dyndata;
@@ -314,9 +320,11 @@ typedef struct FuncState {
   int np;  /* number of elements in 'p' */
   int nabslineinfo;  /* number of elements in 'abslineinfo' */
   int firstlocal;  /* index of first local var (in Dyndata array) */
+  int firstconst;  /* [Pluto] index of first compile-time constant (in Dyndata array) */
   int firstlabel;  /* index of first label (in 'dyd->label->arr') */
   short ndebugvars;  /* number of elements in 'f->locvars' */
   lu_byte nactvar;  /* number of active local variables */
+  int nactconst;  /* [Pluto] number of active constants */
   lu_byte nups;  /* number of upvalues */
   lu_byte freereg;  /* first free register */
   lu_byte iwthabs;  /* instructions issued since last absolute line info */
@@ -336,4 +344,8 @@ LUAI_FUNC LClosure *luaY_parser (lua_State *L, ZIO *z, Mbuffer *buff,
 */
 inline Vardesc* getlocalvardesc(FuncState* fs, int vidx) {
   return &fs->ls->dyd->actvar.arr[fs->firstlocal + vidx];
+}
+
+inline Vardesc* getconstvardesc(FuncState* fs, int vidx) {
+  return &fs->ls->dyd->actconst.arr[fs->firstconst + vidx];
 }
