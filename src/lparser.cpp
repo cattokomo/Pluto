@@ -4411,6 +4411,12 @@ static void exprstat (LexState *ls) {
     v.prev = NULL;
     restassign(ls, &v, 1);
   }
+  else if (ls->t.token == TK_ARROW) { /* stat -> left-to-right assignment ? */
+    luaX_next(ls);
+    expdesc rhs;
+    primaryexp(ls, &rhs);
+    luaK_storevar(ls->fs, &rhs, &v.v);
+  }
   else {  /* stat -> func */
     Instruction *inst;
     check_condition(ls, v.v.k == VCALL || v.v.k == VSAFECALL, "syntax error");
