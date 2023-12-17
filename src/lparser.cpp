@@ -4413,8 +4413,16 @@ static void exprstat (LexState *ls) {
   }
   else if (ls->t.token == TK_ARROW) { /* stat -> left-to-right assignment ? */
     luaX_next(ls);
+    luaK_setoneret(fs, &v.v);
     expdesc rhs;
-    primaryexp(ls, &rhs);
+    if (testnext(ls, TK_LOCAL)) {
+      int vidx = new_localvar(ls, str_checkname(ls, N_OVERRIDABLE), gettypehint(ls));
+      init_var(fs, &rhs, vidx);
+      adjustlocalvars(ls, 1);
+    }
+    else {
+      primaryexp(ls, &rhs);
+    }
     luaK_storevar(ls->fs, &rhs, &v.v);
   }
   else {  /* stat -> func */
