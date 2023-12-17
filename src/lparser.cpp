@@ -4423,6 +4423,9 @@ static void exprstat (LexState *ls) {
     else {
       primaryexp(ls, &rhs);
     }
+    luaX_prev(ls);  /* if we need to raise an error, we should be on the correct line. */
+    check_readonly(ls, &rhs);
+    luaX_next(ls);
     luaK_storevar(ls->fs, &rhs, &v.v);
   }
   else {  /* stat -> func */
