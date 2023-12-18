@@ -2637,7 +2637,7 @@ static void parentexp (LexState *ls, expdesc *v) {
 }
 
 
-static void primaryexp (LexState *ls, expdesc *v) {
+static void primaryexp (LexState *ls, expdesc *v, TypeHint *prop = nullptr) {
   /* primaryexp -> NAME | '(' expr ')' */
   if (isnametkn(ls, N_RESERVED_NON_VALUE | N_OVERRIDABLE)) {
     const bool is_overridable = ls->t.IsOverridable();
@@ -2659,7 +2659,7 @@ static void primaryexp (LexState *ls, expdesc *v) {
     case '(': {
       int line = ls->getLineNumber();
       luaX_next(ls);
-      expr(ls, v);
+      expr(ls, v, prop);
       check_match(ls, ')', '(', line);
       luaK_dischargevars(ls->fs, v);
       return;
@@ -2695,7 +2695,7 @@ static void suffixedexp (LexState *ls, expdesc *v, int flags = 0, TypeHint *prop
   /* suffixedexp ->
        primaryexp { '.' NAME | '[' exp ']' | ':' NAME funcargs | funcargs } */
   int line = ls->getLineNumber();
-  primaryexp(ls, v);
+  primaryexp(ls, v, prop);
   if (prop) {
     if (v->k == VINDEXUP) {
       TValue *key = &ls->fs->f->k[v->u.ind.idx];
@@ -4406,7 +4406,8 @@ static void exprstat (LexState *ls) {
   /* stat -> func | assignment */
   FuncState *fs = ls->fs;
   struct LHS_assign v;
-  suffixedexp(ls, &v.v);
+  TypeHint prop;
+  suffixedexp(ls, &v.v, 0, &prop);
   if (ls->t.token == '=' || ls->t.token == ',') { /* stat -> assignment ? */
     v.prev = NULL;
     restassign(ls, &v, 1);
@@ -4416,17 +4417,23 @@ static void exprstat (LexState *ls) {
     luaK_setoneret(fs, &v.v);
     expdesc rhs;
     if (testnext(ls, TK_LOCAL)) {
-      int vidx = new_localvar(ls, str_checkname(ls, N_OVERRIDABLE), gettypehint(ls));
+      const auto line = ls->getLineNumber();
+      TString *name = str_checkname(ls, N_OVERRIDABLE);
+      TypeHint hint = gettypehint(ls);
+      int vidx = new_localvar(ls, name, line, hint);
       init_var(fs, &rhs, vidx);
+      exp_propagate(ls, v.v, prop);
+      process_assign(ls, getlocalvardesc(fs, vidx), prop, line);
+      luaK_exp2nextreg(fs, &v.v);
       adjustlocalvars(ls, 1);
     }
     else {
       primaryexp(ls, &rhs);
+      luaX_prev(ls);  /* if we need to raise an error, we should be on the correct line. */
+      check_readonly(ls, &rhs);
+      luaX_next(ls);
+      luaK_storevar(ls->fs, &rhs, &v.v);
     }
-    luaX_prev(ls);  /* if we need to raise an error, we should be on the correct line. */
-    check_readonly(ls, &rhs);
-    luaX_next(ls);
-    luaK_storevar(ls->fs, &rhs, &v.v);
   }
   else {  /* stat -> func */
     Instruction *inst;
