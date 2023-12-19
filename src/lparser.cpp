@@ -4415,25 +4415,17 @@ static void exprstat (LexState *ls) {
   else if (ls->t.token == TK_ARROW) { /* stat -> left-to-right assignment ? */
     luaX_next(ls);
     luaK_setoneret(fs, &v.v);
+    testnext(ls, TK_LOCAL);
+    const auto line = ls->getLineNumber();
+    TString *name = str_checkname(ls, N_OVERRIDABLE);
+    TypeHint hint = gettypehint(ls);
+    int vidx = new_localvar(ls, name, line, hint);
     expdesc rhs;
-    if (testnext(ls, TK_LOCAL)) {
-      const auto line = ls->getLineNumber();
-      TString *name = str_checkname(ls, N_OVERRIDABLE);
-      TypeHint hint = gettypehint(ls);
-      int vidx = new_localvar(ls, name, line, hint);
-      init_var(fs, &rhs, vidx);
-      exp_propagate(ls, v.v, prop);
-      process_assign(ls, getlocalvardesc(fs, vidx), prop, line);
-      luaK_exp2nextreg(fs, &v.v);
-      adjustlocalvars(ls, 1);
-    }
-    else {
-      primaryexp(ls, &rhs);
-      luaX_prev(ls);  /* if we need to raise an error, we should be on the correct line. */
-      check_readonly(ls, &rhs);
-      luaX_next(ls);
-      luaK_storevar(ls->fs, &rhs, &v.v);
-    }
+    init_var(fs, &rhs, vidx);
+    exp_propagate(ls, v.v, prop);
+    process_assign(ls, getlocalvardesc(fs, vidx), prop, line);
+    luaK_exp2nextreg(fs, &v.v);
+    adjustlocalvars(ls, 1);
   }
   else {  /* stat -> func */
     Instruction *inst;
