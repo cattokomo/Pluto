@@ -1165,6 +1165,8 @@ void luaK_prepcallfirstarg (FuncState *fs, expdesc *e, expdesc *func) {
     luaK_codeABC(fs, OP_MOVE, basereg + 1, ereg, 0);
   }
 
+  fs->freereg = basereg + 2;
+
   /* finally, update expdesc */
   e->u.reg = basereg;
   e->k = VNONRELOC;  /* expression has a fixed register */
